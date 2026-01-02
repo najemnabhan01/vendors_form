@@ -538,7 +538,13 @@ App.Views.Form = {
                 matches.forEach(client => {
                     const div = document.createElement('div');
                     div.className = 'autocomplete-item';
-                    div.innerHTML = `<strong>${client.name}</strong> - ${client.contact}`;
+
+                    const strong = document.createElement('strong');
+                    strong.textContent = client.name;
+
+                    div.appendChild(strong);
+                    div.appendChild(document.createTextNode(` - ${client.contact}`)); // Safe text node
+
                     div.addEventListener('click', () => {
                         document.getElementById('empresa').value = client.name;
                         document.getElementById('nombre_cliente').value = client.contact;
