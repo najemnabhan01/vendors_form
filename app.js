@@ -474,7 +474,7 @@ App.Views.Form = {
             } catch (err) {
                 alert('Error: ' + err.message);
             } finally {
-                btn.disabled = false; btn.textContent = 'Enviar Reporte';
+                UI.hideLoading();
             }
         });
 
