@@ -411,7 +411,6 @@ async function renderApp() {
     const user = App.Services.Auth.getCurrentUser();
 
     // AUTO-BOOTSTRAP ADMIN
-    // If no users exist, create one automatically
     try {
         const usersSnap = await getDocs(collection(db, "users"));
         if (usersSnap.empty) {
@@ -426,8 +425,13 @@ async function renderApp() {
             });
             alert("⚠️ PRIMER INICIO\n\nUsuario Admin Creado Automáticamente:\nEmail: admin@vendors.com\nClave: admin123");
         }
-    } catch (e) { console.error("Auto-init error", e); }
-
+    } catch (e) {
+        if (e.code === 'permission-denied') {
+            console.warn("Bloqueado por reglas de seguridad. Configura Firestore para permitir lectura.");
+        } else {
+            console.error("Auto-init error", e);
+        }
+    }
 
     if (!user) {
         app.innerHTML = App.Views.Login.render();
@@ -444,3 +448,4 @@ async function renderApp() {
 }
 
 renderApp();
+```
