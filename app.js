@@ -1,17 +1,12 @@
 /**
- * Vendor App - Firebase Version
- * Uses Firestore for real-time data persistence
+ * Vendor App - Firebase Secure Version
+ * Uses Firebase Auth + Firestore
  */
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
 import {
-    getFirestore, collection, addDoc, getDocs, query, where, updateDoc, doc
+    getFirestore, collection, addDoc, getDocs, query, where, updateDoc, doc, getDoc, setDoc
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-
-// ==========================================
-// CONFIGURATION
-// ==========================================
-// ⚠️ IMPORTANTE: Reemplaza estos valores con los de tu proyecto de Firebase
 // Ve a https://console.firebase.google.com/ > Crear Proyecto > Agrega Web App
 const firebaseConfig = {
     apiKey: "AIzaSyBxLLhCArXy9PyZ7f4S6fmntUf2ippMXKE",
