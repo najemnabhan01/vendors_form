@@ -14,12 +14,13 @@ import {
 // ⚠️ IMPORTANTE: Reemplaza estos valores con los de tu proyecto de Firebase
 // Ve a https://console.firebase.google.com/ > Crear Proyecto > Agrega Web App
 const firebaseConfig = {
-    apiKey: "PEGAR_TU_API_KEY_AQUI",
-    authDomain: "TU_PROYECTO.firebaseapp.com",
-    projectId: "TU_PROJECT_ID",
-    storageBucket: "TU_PROYECTO.appspot.com",
-    messagingSenderId: "TU_MESSAGING_ID",
-    appId: "TU_APP_ID"
+    apiKey: "AIzaSyBxLLhCArXy9PyZ7f4S6fmntUf2ippMXKE",
+    authDomain: "vendors-form.firebaseapp.com",
+    projectId: "vendors-form",
+    storageBucket: "vendors-form.firebasestorage.app",
+    messagingSenderId: "165782127338",
+    appId: "1:165782127338:web:7c2281b0992751cf85cd93",
+    measurementId: "G-Z5DPM16XZK"
 };
 
 // Initialize Firebase
