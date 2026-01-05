@@ -448,4 +448,3 @@ async function renderApp() {
 }
 
 renderApp();
-```
