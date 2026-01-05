@@ -544,3 +544,44 @@ onAuthStateChanged(auth, async (firebaseUser) => {
     }
     renderApp();
 });
+
+// AUTO-INIT: Intentar crear admin si no hay usuarios
+(async () => {
+    try {
+        const usersRef = collection(db, "users");
+        // Intentamos leer. Si falla por permisos, saltará al catch.
+        const snapshot = await getDocs(usersRef);
+
+        if (snapshot.empty) {
+            console.log("No hay usuarios. Intentando crear Admin Automático...");
+            const adminEmail = "admin@vendors.com";
+
+            // 1. Crear Perfil en Firestore
+            await setDoc(doc(db, "users", adminEmail), {
+                email: adminEmail,
+                name: "Administrador",
+                role: "admin",
+                createdAt: new Date().toISOString()
+            });
+
+            // 2. Crear Auth
+            try {
+                await createUserWithEmailAndPassword(auth, adminEmail, "admin123");
+                alert(`✅ USUARIO ADMIN CREADO\n\nCorreo: ${adminEmail}\nContraseña: admin123\n\n¡Ingresa ahora!`);
+            } catch (authErr) {
+                if (authErr.code === 'auth/email-already-in-use') {
+                    // Si ya existe el Auth pero no la DB, acabamos de arreglar la DB arriba.
+                    alert(`✅ USUARIO ADMIN RESTAURADO\n\nCorreo: ${adminEmail}\nContraseña: admin123\n\n(El perfil de base de datos faltaba y fue recreado).`);
+                } else {
+                    console.error("Error creando Auth:", authErr);
+                }
+            }
+        }
+    } catch (e) {
+        if (e.code === 'permission-denied') {
+            console.warn("Auto-Init: Permisos denegados. (Esto es correcto si ya cerraste las reglas de seguridad).");
+        } else {
+            console.error("Error auto-init:", e);
+        }
+    }
+})();
