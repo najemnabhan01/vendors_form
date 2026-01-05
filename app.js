@@ -1,7 +1,36 @@
 /**
- * Vendor App - Single File Version
- * Merged to support file:// protocol without CORS errors
+ * Vendor App - Firebase Version
+ * Uses Firestore for real-time data persistence
  */
+
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+import {
+    getFirestore, collection, addDoc, getDocs, query, where, updateDoc, doc
+} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+// ==========================================
+// CONFIGURATION
+// ==========================================
+// ⚠️ IMPORTANTE: Reemplaza estos valores con los de tu proyecto de Firebase
+// Ve a https://console.firebase.google.com/ > Crear Proyecto > Agrega Web App
+const firebaseConfig = {
+    apiKey: "PEGAR_TU_API_KEY_AQUI",
+    authDomain: "TU_PROYECTO.firebaseapp.com",
+    projectId: "TU_PROJECT_ID",
+    storageBucket: "TU_PROYECTO.appspot.com",
+    messagingSenderId: "TU_MESSAGING_ID",
+    appId: "TU_APP_ID"
+};
+
+// Initialize Firebase
+let db;
+try {
+    const app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    console.log("Firebase initialized");
+} catch (e) {
+    console.error("Error initializing Firebase. Did you replace the config keys?", e);
+}
 
 // Initialize Namespaces
 const App = {
@@ -14,133 +43,119 @@ const App = {
 };
 
 // ==========================================
-// SERVICE: Storage
+// SERVICE: Storage (Firestore)
 // ==========================================
-(function () {
-    const STORAGE_KEY = 'vendor_app_data';
+App.Services.Storage = {
+    // Users
+    getUsers: async () => {
+        const q = query(collection(db, "users"));
+        const snapshot = await getDocs(q);
+        return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
 
-    // Initial Data - Only used on first run
-    const INITIAL_DATA = {
-        users: [
-            { username: 'admin', password: '123', role: 'admin', name: 'Administrador' },
-            { username: 'juan', password: '123', role: 'vendor', name: 'Juan Pérez' }
-        ],
-        clients: [
-            { name: 'Tech Solutions', contact: 'Carlos Gomez', phone: '3001234567', type: 'Recurrente' },
-            { name: 'Restaurante El Sabor', contact: 'Maria Rodriguez', phone: '3109876543', type: 'Nuevo' }
-        ],
-        reports: []
-    };
-
-    function getData() {
-        const data = localStorage.getItem(STORAGE_KEY);
-        if (!data) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_DATA));
-            return INITIAL_DATA;
+    addUser: async (user) => {
+        // Check duplicate username
+        const q = query(collection(db, "users"), where("username", "==", user.username));
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+            throw new Error('El usuario ya existe');
         }
-        return JSON.parse(data);
-    }
+        await addDoc(collection(db, "users"), user);
+    },
 
-    function saveData(data) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    }
+    updatePassword: async (username, newPassword) => {
+        const q = query(collection(db, "users"), where("username", "==", username));
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) throw new Error('Usuario no encontrado');
 
-    App.Services.Storage = {
-        getUsers: () => getData().users,
+        const docRef = doc(db, "users", snapshot.docs[0].id);
+        await updateDoc(docRef, { password: newPassword });
+    },
 
-        addUser: (user) => {
-            const data = getData();
-            if (data.users.some(u => u.username === user.username)) {
-                throw new Error('El usuario ya existe');
-            }
-            data.users.push(user);
-            saveData(data);
-        },
+    // Clients
+    getClients: async () => {
+        const snapshot = await getDocs(collection(db, "clients"));
+        return snapshot.docs.map(d => d.data());
+    },
 
-        updatePassword: (username, newPassword) => {
-            const data = getData();
-            const userIndex = data.users.findIndex(u => u.username === username);
-            if (userIndex === -1) throw new Error('Usuario no encontrado');
+    findClient: async (queryText) => {
+        // Firestore simple search (Client-side filtering for simplicity in this demo)
+        const snapshot = await getDocs(collection(db, "clients"));
+        const allClients = snapshot.docs.map(d => d.data());
 
-            data.users[userIndex].password = newPassword;
-            saveData(data);
-        },
+        const lowerQuery = queryText.toLowerCase();
+        return allClients.filter(c =>
+            c.name.toLowerCase().includes(lowerQuery) ||
+            c.contact.toLowerCase().includes(lowerQuery)
+        );
+    },
 
-        getClients: () => getData().clients,
+    checkDuplicateContact: async (phone) => {
+        const q = query(collection(db, "clients"), where("phone", "==", phone));
+        const snapshot = await getDocs(q);
+        return !snapshot.empty;
+    },
 
-        addClient: (client) => {
-            const data = getData();
-            data.clients.push(client);
-            saveData(data);
-        },
+    // Reports
+    getReports: async () => {
+        const q = query(collection(db, "reports")); // You might want to orderBy dates in production
+        const snapshot = await getDocs(q);
+        const reports = snapshot.docs.map(d => d.data());
+        // Sort manually by date desc
+        return reports.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    },
 
-        findClient: (query) => {
-            const clients = getData().clients;
-            const lowerQuery = query.toLowerCase();
-            return clients.filter(c =>
-                c.name.toLowerCase().includes(lowerQuery) ||
-                c.contact.toLowerCase().includes(lowerQuery)
-            );
-        },
+    addReport: async (report) => {
+        const timestamp = new Date().toISOString();
+        await addDoc(collection(db, "reports"), {
+            ...report,
+            timestamp: timestamp
+        });
 
-        checkDuplicateContact: (phone) => {
-            const clients = getData().clients;
-            return clients.find(c => c.phone === phone);
-        },
+        // Check and Add Client if new
+        const q = query(collection(db, "clients"), where("name", "==", report.empresa));
+        const snapshot = await getDocs(q);
 
-        getReports: () => getData().reports,
-
-        addReport: (report) => {
-            const data = getData();
-            data.reports.push({
-                ...report,
-                id: Date.now(),
-                timestamp: new Date().toISOString()
+        if (snapshot.empty) {
+            await addDoc(collection(db, "clients"), {
+                name: report.empresa,
+                contact: report.nombre_cliente,
+                phone: report.contacto,
+                type: report.tipo_cliente || 'Nuevo'
             });
-
-            const exists = data.clients.some(c => c.name === report.empresa);
-            if (!exists) {
-                data.clients.push({
-                    name: report.empresa,
-                    contact: report.nombre_cliente,
-                    phone: report.contacto,
-                    type: report.tipo_cliente || 'Nuevo'
-                });
-            }
-            saveData(data);
         }
-    };
-})();
+    }
+};
 
 // ==========================================
 // SERVICE: Auth
 // ==========================================
-(function () {
-    const SESSION_KEY = 'vendor_app_session';
+const SESSION_KEY = 'vendor_app_session';
 
-    App.Services.Auth = {
-        login: (username, password) => {
-            const users = App.Services.Storage.getUsers();
-            const user = users.find(u => u.username === username && u.password === password);
+App.Services.Auth = {
+    login: async (username, password) => {
+        const users = await App.Services.Storage.getUsers();
+        // Note: For production, password hashing is essential. 
+        // This compares plain text as requested by the simple mock scope.
+        const user = users.find(u => u.username === username && u.password === password);
 
-            if (user) {
-                localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-                return user;
-            }
-            return null;
-        },
-
-        logout: () => {
-            localStorage.removeItem(SESSION_KEY);
-            window.location.reload();
-        },
-
-        getCurrentUser: () => {
-            const session = localStorage.getItem(SESSION_KEY);
-            return session ? JSON.parse(session) : null;
+        if (user) {
+            localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+            return user;
         }
-    };
-})();
+        return null;
+    },
+
+    logout: () => {
+        localStorage.removeItem(SESSION_KEY);
+        window.location.reload();
+    },
+
+    getCurrentUser: () => {
+        const session = localStorage.getItem(SESSION_KEY);
+        return session ? JSON.parse(session) : null;
+    }
+};
 
 // ==========================================
 // VIEW: Login
@@ -177,17 +192,31 @@ App.Views.Login = {
 
     attachEvents: (onLoginSuccess) => {
         const form = document.getElementById('loginForm');
-        form.addEventListener('submit', (e) => {
+        form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const btn = form.querySelector('button');
+            const originalText = btn.innerText;
+            btn.innerText = 'Verificando...';
+            btn.disabled = true;
+
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
 
-            const user = App.Services.Auth.login(username, password);
-            if (user) {
-                onLoginSuccess(user);
-            } else {
-                const errorDiv = document.getElementById('loginError');
-                errorDiv.style.display = 'block';
+            try {
+                const user = await App.Services.Auth.login(username, password);
+                if (user) {
+                    onLoginSuccess(user);
+                } else {
+                    const errorDiv = document.getElementById('loginError');
+                    errorDiv.style.display = 'block';
+                    errorDiv.innerText = 'Usuario o contraseña incorrectos';
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Error de conexión con la base de datos. Verifica tu configuración.');
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
             }
         });
     }
@@ -199,8 +228,8 @@ App.Views.Login = {
 App.Views.Admin = {
     filters: { start: '', end: '' },
 
-    getFilteredReports: () => {
-        const reports = App.Services.Storage.getReports();
+    getFilteredReports: async () => {
+        const reports = await App.Services.Storage.getReports();
         return reports.filter(r => {
             if (App.Views.Admin.filters.start && r.fecha < App.Views.Admin.filters.start) return false;
             if (App.Views.Admin.filters.end && r.fecha > App.Views.Admin.filters.end) return false;
@@ -208,8 +237,8 @@ App.Views.Admin = {
         });
     },
 
-    exportToCSV: () => {
-        const reports = App.Views.Admin.getFilteredReports();
+    exportToCSV: async () => {
+        const reports = await App.Views.Admin.getFilteredReports();
         if (reports.length === 0) {
             alert('No hay datos para exportar en las fechas seleccionadas.');
             return;
@@ -237,10 +266,10 @@ App.Views.Admin = {
         document.body.removeChild(link);
     },
 
-    render: () => {
-        const users = App.Services.Storage.getUsers();
-        // Filter reports
-        const reports = App.Views.Admin.getFilteredReports();
+    render: async () => {
+        // Load data async
+        const users = await App.Services.Storage.getUsers();
+        const reports = await App.Views.Admin.getFilteredReports();
 
         const userRows = users.map(u => `
             <tr>
@@ -276,7 +305,6 @@ App.Views.Admin = {
                 <div class="dashboard-section">
                     <h3>Gestión de Usuarios</h3>
                     <div class="form-grid">
-                         <!-- Create User -->
                         <form id="createVendorForm" class="inline-form" style="display:contents;">
                             <div style="background: white; padding: 16px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); grid-column: span 2;">
                                 <h4 style="margin-bottom:10px;">Crear Nuevo Usuario</h4>
@@ -303,7 +331,6 @@ App.Views.Admin = {
                 <div class="dashboard-section">
                     <h3>Reporte de Actividades</h3>
                     
-                    <!-- Filters -->
                     <div class="filters-bar" style="background: white; padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
                         <div style="flex: 1;">
                             <label style="font-size: 0.8rem;">Fecha Inicio</label>
@@ -338,8 +365,6 @@ App.Views.Admin = {
                         </div>
                     </div>
                 </div>
-
-                <!-- Modals could go here, simply sticking to prompt alerts for password change for simplicity -->
             </div>
         `;
     },
@@ -356,7 +381,7 @@ App.Views.Admin = {
         const updateFilters = () => {
             App.Views.Admin.filters.start = startInput.value;
             App.Views.Admin.filters.end = endInput.value;
-            renderApp(); // Re-render to show filtered data
+            renderApp();
         }
 
         startInput.addEventListener('change', updateFilters);
@@ -368,31 +393,35 @@ App.Views.Admin = {
         });
 
         // Create User
-        document.getElementById('createVendorForm').addEventListener('submit', (e) => {
+        document.getElementById('createVendorForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
             try {
                 const newUser = {
                     username: document.getElementById('newUsername').value,
-                    password: document.getElementById('newPassword').value,
+                    password: document.getElementById('newPassword').value, // In production, hash this!
                     name: document.getElementById('newName').value,
-                    role: 'vendor' // Default role
+                    role: 'vendor'
                 };
-                App.Services.Storage.addUser(newUser);
+                await App.Services.Storage.addUser(newUser);
                 alert('Usuario creado exitosamente');
                 renderApp();
             } catch (err) {
                 alert(err.message);
+            } finally {
+                btn.disabled = false;
             }
         });
 
-        // Pswd Change (Event Delegation)
+        // Pswd Change
         document.querySelectorAll('.btn-password').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
                 const username = e.target.getAttribute('data-username');
                 const newPass = prompt(`Ingrese nueva contraseña para ${username}:`);
                 if (newPass) {
                     try {
-                        App.Services.Storage.updatePassword(username, newPass);
+                        await App.Services.Storage.updatePassword(username, newPass);
                         alert('Contraseña actualizada');
                     } catch (err) {
                         alert(err.message);
@@ -528,22 +557,22 @@ App.Views.Form = {
         const empresaInput = document.getElementById('empresa');
         const suggestionsDiv = document.getElementById('suggestions');
 
-        empresaInput.addEventListener('input', (e) => {
+        empresaInput.addEventListener('input', async (e) => {
             const val = e.target.value;
             suggestionsDiv.innerHTML = '';
             if (val.length < 2) return;
 
-            const matches = App.Services.Storage.findClient(val);
-            if (matches.length > 0) {
+            // Notice we use async find now
+            const matches = await App.Services.Storage.findClient(val);
+            if (matches && matches.length > 0) {
                 matches.forEach(client => {
                     const div = document.createElement('div');
                     div.className = 'autocomplete-item';
 
                     const strong = document.createElement('strong');
                     strong.textContent = client.name;
-
                     div.appendChild(strong);
-                    div.appendChild(document.createTextNode(` - ${client.contact}`)); // Safe text node
+                    div.appendChild(document.createTextNode(` - ${client.contact}`));
 
                     div.addEventListener('click', () => {
                         document.getElementById('empresa').value = client.name;
@@ -565,29 +594,40 @@ App.Views.Form = {
 
         // Duplicate
         const contactInput = document.getElementById('contacto');
-        contactInput.addEventListener('blur', (e) => {
+        contactInput.addEventListener('blur', async (e) => {
             const val = e.target.value;
-            if (val && App.Services.Storage.checkDuplicateContact(val)) {
-                document.getElementById('duplicateAlert').style.display = 'block';
+            // Notice await
+            const isDuplicate = await App.Services.Storage.checkDuplicateContact(val);
+            const alert = document.getElementById('duplicateAlert');
+            if (val && isDuplicate) {
+                alert.style.display = 'block';
             } else {
-                document.getElementById('duplicateAlert').style.display = 'none';
+                alert.style.display = 'none';
             }
         });
 
         // Submit
-        document.getElementById('vendorForm').addEventListener('submit', (e) => {
+        document.getElementById('vendorForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
+            btn.textContent = "Enviando...";
+
             const formData = new FormData(e.target);
             const report = Object.fromEntries(formData.entries());
             report.cobranza = e.target.querySelector('[name="cobranza"]').checked;
 
             try {
-                App.Services.Storage.addReport(report);
+                await App.Services.Storage.addReport(report);
                 alert('Reporte enviado con éxito');
                 e.target.reset();
                 document.querySelector('[name="asesor"]').value = App.Services.Auth.getCurrentUser().name;
             } catch (err) {
+                console.error(err);
                 alert('Error al guardar: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Enviar Reporte";
             }
         });
     }
@@ -596,7 +636,7 @@ App.Views.Form = {
 // ==========================================
 // CONTROLLER: Main
 // ==========================================
-function renderApp() {
+async function renderApp() {
     const app = document.getElementById('app');
     const user = App.Services.Auth.getCurrentUser();
 
@@ -611,7 +651,8 @@ function renderApp() {
     }
 
     if (user.role === 'admin') {
-        app.innerHTML = App.Views.Admin.render();
+        const adminHtml = await App.Views.Admin.render(); // Admin render is async now (fetches data)
+        app.innerHTML = adminHtml;
         App.Views.Admin.attachEvents(renderApp);
     } else {
         app.innerHTML = App.Views.Form.render();
