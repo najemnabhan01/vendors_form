@@ -172,7 +172,7 @@ App.Views.Login = {
                         </div>
                         <div class="form-group">
                             <label for="password">Contraseña</label>
-                            <input type="password" id="password" required>
+                            <input type="password" id="password" required placeholder="********" autocomplete="current-password">
                         </div>
                         <div class="form-actions">
                             <button type="submit" class="btn-submit">Ingresar</button>
