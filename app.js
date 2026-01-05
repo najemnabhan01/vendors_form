@@ -227,21 +227,43 @@ App.Views.Login = {
 // VIEW: Admin
 // ==========================================
 App.Views.Admin = {
-    filters: { start: '', end: '' },
+    filters: { start: '', end: '', asesor: '', empresa: '' },
+
+    showLoading: () => {
+        const existing = document.querySelector('.loader-overlay');
+        if (existing) return;
+        const loader = document.createElement('div');
+        loader.className = 'loader-overlay';
+        loader.innerHTML = '<div class="spinner"></div>';
+        document.body.appendChild(loader);
+    },
+
+    hideLoading: () => {
+        const loader = document.querySelector('.loader-overlay');
+        if (loader) loader.remove();
+    },
 
     getFilteredReports: async () => {
-        const reports = await App.Services.Storage.getReports();
-        return reports.filter(r => {
-            if (App.Views.Admin.filters.start && r.fecha < App.Views.Admin.filters.start) return false;
-            if (App.Views.Admin.filters.end && r.fecha > App.Views.Admin.filters.end) return false;
-            return true;
-        });
+        try {
+            App.Views.Admin.showLoading();
+            const reports = await App.Services.Storage.getReports();
+            return reports.filter(r => {
+                const f = App.Views.Admin.filters;
+                if (f.start && r.fecha < f.start) return false;
+                if (f.end && r.fecha > f.end) return false;
+                if (f.asesor && r.asesor !== f.asesor) return false;
+                if (f.empresa && !r.empresa.toLowerCase().includes(f.empresa.toLowerCase())) return false;
+                return true;
+            });
+        } finally {
+            App.Views.Admin.hideLoading();
+        }
     },
 
     exportToCSV: async () => {
         const reports = await App.Views.Admin.getFilteredReports();
         if (reports.length === 0) {
-            alert('No hay datos para exportar en las fechas seleccionadas.');
+            alert('No hay datos para exportar con los filtros actuales.');
             return;
         }
 
@@ -268,9 +290,13 @@ App.Views.Admin = {
     },
 
     render: async () => {
+        App.Views.Admin.showLoading();
         // Load data async
         const users = await App.Services.Storage.getUsers();
-        const reports = await App.Views.Admin.getFilteredReports();
+        // Get unique advisors for filter
+        const advisors = users.filter(u => u.role !== 'admin'); // Assuming mostly vendors need filtering
+
+        const reports = await App.Views.Admin.getFilteredReports(); // Filtered list
 
         const userRows = users.map(u => `
             <tr>
@@ -290,11 +316,21 @@ App.Views.Admin = {
                 <td>${r.asesor}</td>
                 <td>${r.fecha}</td>
                 <td>${r.empresa}</td>
-                <td>${r.tipo_actividad}</td>
-                <td>${r.monto ? '$' + r.monto : '-'}</td>
-                <td>${r.cobranza ? 'Sí' : 'No'}</td>
+                <td>
+                    <span class="badge ${r.cobranza ? 'badge-success' : 'badge-warning'}">
+                        ${r.cobranza ? 'Cobrado' : 'Pendiente'}
+                    </span>
+                </td>
+                <td>${r.monto ? '$' + parseFloat(r.monto).toFixed(2) : '-'}</td>
+                <td>
+                    <button onclick="alert('${r.descripcion}')" style="font-size:0.8rem; cursor:pointer;">Ver</button>
+                </td>
             </tr>
         `).join('');
+
+        const advisorOptions = advisors.map(a => `<option value="${a.name}" ${App.Views.Admin.filters.asesor === a.name ? 'selected' : ''}>${a.name}</option>`).join('');
+
+        App.Views.Admin.hideLoading();
 
         return `
             <div class="admin-dashboard">
@@ -304,45 +340,35 @@ App.Views.Admin = {
                 </header>
 
                 <div class="dashboard-section">
-                    <h3>Gestión de Usuarios</h3>
-                    <div class="form-grid">
-                        <form id="createVendorForm" class="inline-form" style="display:contents;">
-                            <div style="background: white; padding: 16px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); grid-column: span 2;">
-                                <h4 style="margin-bottom:10px;">Crear Nuevo Usuario</h4>
-                                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                    <input type="text" id="newUsername" placeholder="Usuario" required style="flex:1;">
-                                    <input type="password" id="newPassword" placeholder="Contraseña" required style="flex:1;">
-                                    <input type="text" id="newName" placeholder="Nombre completo" required style="flex:2;">
-                                    <button type="submit" class="btn-primary" style="width: auto;">Crear</button>
-                                </div>
-                            </div>
-                        </form>
-                    </div>
-
-                    <div class="table-responsive" style="margin-top: 10px; background: white; padding: 15px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                        <table style="width:100%">
-                            <thead>
-                                <tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr>
-                            </thead>
-                            <tbody id="usersTableBody">${userRows}</tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="dashboard-section">
                     <h3>Reporte de Actividades</h3>
                     
-                    <div class="filters-bar" style="background: white; padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; gap: 16px; align-items: end; flex-wrap: wrap;">
-                        <div style="flex: 1;">
+                    <div class="filters-bar" style="background: white; padding: 16px; border-radius: 12px; margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; align-items: end;">
+                        
+                        <div>
                             <label style="font-size: 0.8rem;">Fecha Inicio</label>
                             <input type="date" id="filterStart" value="${App.Views.Admin.filters.start}">
                         </div>
-                         <div style="flex: 1;">
+                        
+                        <div>
                             <label style="font-size: 0.8rem;">Fecha Fin</label>
                             <input type="date" id="filterEnd" value="${App.Views.Admin.filters.end}">
                         </div>
-                        <button id="btnExport" class="btn-primary" style="width: auto; background-color: #059669;">
-                            Descargar Excel/CSV
+
+                        <div>
+                            <label style="font-size: 0.8rem;">Asesor</label>
+                            <select id="filterAsesor" style="width:100%; padding: 12px; border: 2px solid transparent; background: var(--input-bg); border-radius: var(--radius-md);">
+                                <option value="">Todos</option>
+                                ${advisorOptions}
+                            </select>
+                        </div>
+
+                         <div>
+                            <label style="font-size: 0.8rem;">Empresa</label>
+                            <input type="text" id="filterClient" placeholder="Buscar empresa..." value="${App.Views.Admin.filters.empresa}">
+                        </div>
+
+                        <button id="btnExport" class="btn-primary" style="height: 48px; background-color: #059669;">
+                            Descargar Excel
                         </button>
                     </div>
 
@@ -354,14 +380,36 @@ App.Views.Admin = {
                                         <th>Asesor</th>
                                         <th>Fecha</th>
                                         <th>Empresa</th>
-                                        <th>Tipo</th>
+                                        <th>Estado</th>
                                         <th>Monto</th>
-                                        <th>Cobranza</th>
+                                        <th>Detalles</th>
                                     </tr>
                                 </thead>
                                 <tbody id="reportsTableBody">
-                                    ${reportRows.length ? reportRows : '<tr><td colspan="6" style="text-align:center; color: #888;">No hay reportes en este rango de fechas</td></tr>'}
+                                    ${reportRows.length ? reportRows : '<tr><td colspan="6" style="text-align:center; color: #888; padding: 20px;">No hay reportes con estos filtros</td></tr>'}
                                 </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-section">
+                    <h3>Gestión de Usuarios</h3>
+                    <div class="dashboard-card" style="margin-bottom:0;">
+                        <form id="createVendorForm" class="inline-form" style="box-shadow:none; padding:0; margin-bottom: 20px;">
+                            <h4 style="grid-column: 1 / -1; margin-bottom:10px;">Crear Nuevo Usuario</h4>
+                            <input type="text" id="newUsername" placeholder="Usuario" required>
+                            <input type="password" id="newPassword" placeholder="Contraseña" required>
+                            <input type="text" id="newName" placeholder="Nombre completo" required>
+                            <button type="submit" class="btn-primary">Crear</button>
+                        </form>
+                        
+                         <div class="table-responsive">
+                            <table style="width:100%">
+                                <thead>
+                                    <tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr>
+                                </thead>
+                                <tbody id="usersTableBody">${userRows}</tbody>
                             </table>
                         </div>
                     </div>
@@ -375,18 +423,28 @@ App.Views.Admin = {
             App.Services.Auth.logout();
         });
 
-        // Date Filters
+        // Filters
         const startInput = document.getElementById('filterStart');
         const endInput = document.getElementById('filterEnd');
+        const asesorInput = document.getElementById('filterAsesor');
+        const clientInput = document.getElementById('filterClient');
 
         const updateFilters = () => {
             App.Views.Admin.filters.start = startInput.value;
             App.Views.Admin.filters.end = endInput.value;
+            App.Views.Admin.filters.asesor = asesorInput.value;
+            App.Views.Admin.filters.empresa = clientInput.value;
             renderApp();
         }
 
         startInput.addEventListener('change', updateFilters);
         endInput.addEventListener('change', updateFilters);
+        asesorInput.addEventListener('change', updateFilters);
+        clientInput.addEventListener('input', () => {
+            // Debounce slightly for text input
+            clearTimeout(window.searchTimeout);
+            window.searchTimeout = setTimeout(updateFilters, 500);
+        });
 
         // Export
         document.getElementById('btnExport').addEventListener('click', () => {
@@ -401,16 +459,18 @@ App.Views.Admin = {
             try {
                 const newUser = {
                     username: document.getElementById('newUsername').value,
-                    password: document.getElementById('newPassword').value, // In production, hash this!
+                    password: document.getElementById('newPassword').value,
                     name: document.getElementById('newName').value,
                     role: 'vendor'
                 };
+                App.Views.Admin.showLoading();
                 await App.Services.Storage.addUser(newUser);
                 alert('Usuario creado exitosamente');
                 renderApp();
             } catch (err) {
                 alert(err.message);
             } finally {
+                App.Views.Admin.hideLoading();
                 btn.disabled = false;
             }
         });
@@ -422,10 +482,13 @@ App.Views.Admin = {
                 const newPass = prompt(`Ingrese nueva contraseña para ${username}:`);
                 if (newPass) {
                     try {
+                        App.Views.Admin.showLoading();
                         await App.Services.Storage.updatePassword(username, newPass);
                         alert('Contraseña actualizada');
                     } catch (err) {
                         alert(err.message);
+                    } finally {
+                        App.Views.Admin.hideLoading();
                     }
                 }
             });
