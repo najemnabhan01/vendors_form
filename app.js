@@ -696,22 +696,11 @@ App.Views.Form = {
 // CONTROLLER: Main
 // ==========================================
 async function renderApp() {
-    // Check and create default admin if system is empty
-    try {
-        const users = await App.Services.Storage.getUsers();
-        if (users.length === 0) {
-            console.log("Sistema vacío. Creando usuario admin por defecto...");
-            await App.Services.Storage.addUser({
-                username: "admin",
-                password: "123",
-                name: "Administrador Inicial",
-                role: "admin"
-            });
-            alert("¡Bienvenido! Se ha creado un usuario 'admin' con contraseña '123' porque la base de datos estaba vacía.");
-        }
-    } catch (e) {
-        console.error("Error verificando usuarios iniciales:", e);
-    }
+    // La auto-inicialización se ha eliminado por seguridad.
+    // Para crear el primer usuario admin, hazlo desde la consola de Firebase
+    // creando un documento en la colección 'users' con el ID 'admin@app.com'
+    // y los campos: email, name, role='admin'.
+    console.log("La auto-inicialización del admin ha sido eliminada. Crea el primer admin manualmente si es necesario.");
 
     const app = document.getElementById('app');
     const user = App.Services.Auth.getCurrentUser();
