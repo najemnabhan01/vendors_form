@@ -1,15 +1,12 @@
 /**
- * Vendor App - Firebase Secure Version
- * Uses Firebase Auth + Firestore
+ * Vendor App - Firestore Custom Auth Version
+ * Secure enough for internal tools, Zero Configuration required
  */
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
 import {
     getFirestore, collection, addDoc, getDocs, query, where, updateDoc, doc, getDoc, setDoc
 } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
-import {
-    getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged
-} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
 // ==========================================
 // CONFIGURATION
@@ -24,159 +21,24 @@ const firebaseConfig = {
     measurementId: "G-Z5DPM16XZK"
 };
 
-// Initialize Firebase
+// Initialize Firebase (Only Firestore, No Auth Service needed)
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
-const auth = getAuth(app);
 
-// Initialize Namespaces
-const App = {
-    Services: {},
-    Views: {},
-    State: {
-        currentUser: null, // Holds the Firestore user profile
-        filters: { start: '', end: '', asesor: '', empresa: '' }
-    }
-};
+const SESSION_KEY = 'vendor_app_session_v2';
 
 // ==========================================
-// SERVICE: Storage (Firestore)
+// UTILS
 // ==========================================
-App.Services.Storage = {
-    // Users (Whitelist profile management)
-    getUsers: async () => {
-        const q = query(collection(db, "users"));
-        const snapshot = await getDocs(q);
-        return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+const Utils = {
+    // Simple hash for passwords (basic security to avoid plain text)
+    hash: async (string) => {
+        const msgBuffer = new TextEncoder().encode(string);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     },
 
-    // Admin creates a "Profile" to whitelist an email
-    // The actual Auth account is created by the user upon first login
-    whitelistUser: async (userData) => {
-        // Check if email already in system
-        const q = query(collection(db, "users"), where("email", "==", userData.email));
-        const snapshot = await getDocs(q);
-        if (!snapshot.empty) {
-            throw new Error('El correo ya está registrado en el sistema');
-        }
-        // Use email as ID for easy lookup
-        await setDoc(doc(db, "users", userData.email), {
-            ...userData,
-            createdAt: new Date().toISOString()
-        });
-    },
-
-    getUserProfile: async (email) => {
-        const docRef = doc(db, "users", email);
-        const docSnap = await getDoc(docRef);
-        return docSnap.exists() ? docSnap.data() : null;
-    },
-
-    // Clients
-    getClients: async () => {
-        const snapshot = await getDocs(collection(db, "clients"));
-        return snapshot.docs.map(d => d.data());
-    },
-
-    findClient: async (queryText) => {
-        const snapshot = await getDocs(collection(db, "clients"));
-        const allClients = snapshot.docs.map(d => d.data());
-        const lowerQuery = queryText.toLowerCase();
-        return allClients.filter(c =>
-            c.name.toLowerCase().includes(lowerQuery) ||
-            c.contact.toLowerCase().includes(lowerQuery)
-        );
-    },
-
-    checkDuplicateContact: async (phone) => {
-        const q = query(collection(db, "clients"), where("phone", "==", phone));
-        const snapshot = await getDocs(q);
-        return !snapshot.empty;
-    },
-
-    // Reports
-    getReports: async () => {
-        const q = query(collection(db, "reports"));
-        const snapshot = await getDocs(q);
-        const reports = snapshot.docs.map(d => d.data());
-        return reports.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    },
-
-    addReport: async (report) => {
-        const timestamp = new Date().toISOString();
-        await addDoc(collection(db, "reports"), {
-            ...report,
-            timestamp: timestamp
-        });
-
-        // Add Client if new
-        const q = query(collection(db, "clients"), where("name", "==", report.empresa));
-        const snapshot = await getDocs(q);
-
-        if (snapshot.empty) {
-            await addDoc(collection(db, "clients"), {
-                name: report.empresa,
-                contact: report.nombre_cliente,
-                phone: report.contacto,
-                type: report.tipo_cliente || 'Nuevo'
-            });
-        }
-    }
-};
-
-// ==========================================
-// SERVICE: Auth (Firebase Logic)
-// ==========================================
-App.Services.Auth = {
-    // Handles the flow: Try Login -> If fails, check Whitelist -> If whitelisted, Register
-    loginOrRegister: async (email, password) => {
-        try {
-            // 1. Try standard login
-            await signInWithEmailAndPassword(auth, email, password);
-            return { success: true };
-        } catch (loginError) {
-            if (loginError.code === 'auth/user-not-found' || loginError.code === 'auth/invalid-credential') {
-                // 2. Not found in Auth. Check if Admin whitelisted this email in Firestore
-                const profile = await App.Services.Storage.getUserProfile(email);
-
-                if (profile) {
-                    // It IS whitelisted. Create the Auth account now.
-                    try {
-                        await createUserWithEmailAndPassword(auth, email, password);
-                        return { success: true, isNew: true };
-                    } catch (createError) {
-                        throw new Error(App.Services.Auth.mapError(createError.code));
-                    }
-                } else {
-                    throw new Error('Usuario no encontrado o no autorizado por el Administrador.');
-                }
-            } else {
-                throw new Error(App.Services.Auth.mapError(loginError.code));
-            }
-        }
-    },
-
-    logout: async () => {
-        await signOut(auth);
-        window.location.reload();
-    },
-
-    mapError: (code) => {
-        switch (code) {
-            case 'auth/wrong-password': return 'Contraseña incorrecta.';
-            case 'auth/user-not-found': return 'Usuario no encontrado.';
-            case 'auth/invalid-email': return 'Email inválido.';
-            case 'auth/weak-password': return 'La contraseña debe tener al menos 6 caracteres.';
-            case 'auth/email-already-in-use': return 'Este correo ya está registrado.';
-            default: return 'Error de autenticación: ' + code;
-        }
-    }
-};
-
-// ==========================================
-// UTILS: Loading
-// ==========================================
-const UI = {
     showLoading: () => {
         if (document.querySelector('.loader-overlay')) return;
         const loader = document.createElement('div');
@@ -184,6 +46,7 @@ const UI = {
         loader.innerHTML = '<div class="spinner"></div>';
         document.body.appendChild(loader);
     },
+
     hideLoading: () => {
         const loader = document.querySelector('.loader-overlay');
         if (loader) loader.remove();
@@ -191,70 +54,183 @@ const UI = {
 };
 
 // ==========================================
-// VIEW: Login
+// SERVICES
 // ==========================================
-App.Views.Login = {
-    render: () => {
-        return `
-            <div class="login-wrapper">
-                <div class="vendor-form login-form" style="max-width: 400px; margin: 0 auto;">
-                    <div class="form-header">
-                        <h1>Acceso Seguro</h1>
-                        <p>Sistema de Reportes Vendedores</p>
-                    </div>
-                    <form id="loginForm">
-                        <div class="form-group">
-                            <label for="email">Correo Electrónico</label>
-                            <input type="email" id="email" required placeholder="ejemplo@correo.com" autocomplete="username">
-                        </div>
-                        <div class="form-group">
-                            <label for="password">Contraseña</label>
-                            <input type="password" id="password" required placeholder="********" autocomplete="current-password">
-                        </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn-submit">Ingresar</button>
-                        </div>
-                        <div style="margin-top: 15px; font-size: 0.85rem; color: #666; text-align: center;">
-                            <p><strong>Nota:</strong> Si es tu primera vez, ingresa con el correo que te asignó el administrador y crea tu contraseña aquí mismo.</p>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        `;
+const App = {
+    Services: {},
+    Views: {},
+    State: {
+        currentUser: null,
+        filters: { start: '', end: '', asesor: '', empresa: '' }
+    }
+};
+
+App.Services.Auth = {
+    // Custom Login Logic using Firestore
+    login: async (email, password) => {
+        // 1. Hash password to match stored hash
+        const passwordHash = await Utils.hash(password);
+
+        // 2. Query User
+        const q = query(collection(db, "users"), where("email", "==", email));
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+            throw new Error("Usuario no encontrado.");
+        }
+
+        const userData = snapshot.docs[0].data();
+
+        // 3. Verify Password
+        if (userData.password !== passwordHash) {
+            throw new Error("Contraseña incorrecta.");
+        }
+
+        // 4. Save Session
+        const sessionUser = {
+            email: userData.email,
+            name: userData.name,
+            role: userData.role,
+            id: snapshot.docs[0].id
+        };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
+        App.State.currentUser = sessionUser;
+        return sessionUser;
     },
 
-    attachEvents: () => {
-        const form = document.getElementById('loginForm');
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = document.getElementById('email').value.trim();
-            const password = document.getElementById('password').value;
+    logout: () => {
+        localStorage.removeItem(SESSION_KEY);
+        window.location.reload();
+    },
 
-            UI.showLoading();
+    getCurrentUser: () => {
+        const session = localStorage.getItem(SESSION_KEY);
+        const user = session ? JSON.parse(session) : null;
+        App.State.currentUser = user;
+        return user;
+    },
+
+    // Register method for Admin to use
+    registerUser: async (newUser) => {
+        // Check duplicate
+        const q = query(collection(db, "users"), where("email", "==", newUser.email));
+        const snap = await getDocs(q);
+        if (!snap.empty) throw new Error("El correo ya existe.");
+
+        // Hash pwd
+        const hashedPassword = await Utils.hash(newUser.password);
+
+        await addDoc(collection(db, "users"), {
+            ...newUser,
+            password: hashedPassword,
+            createdAt: new Date().toISOString()
+        });
+    },
+
+    updateUserPassword: async (email, newPassword) => {
+        const q = query(collection(db, "users"), where("email", "==", email));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+            const docRef = snap.docs[0].ref;
+            const hashedPassword = await Utils.hash(newPassword);
+            await updateDoc(docRef, { password: hashedPassword });
+        }
+    }
+};
+
+App.Services.Storage = {
+    // Users
+    getUsers: async () => {
+        const snap = await getDocs(collection(db, "users"));
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+
+    // Reports
+    getReports: async () => {
+        const q = query(collection(db, "reports"));
+        const snap = await getDocs(q);
+        const reports = snap.docs.map(d => d.data());
+        return reports.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    },
+
+    addReport: async (report) => {
+        await addDoc(collection(db, "reports"), {
+            ...report, timestamp: new Date().toISOString()
+        });
+
+        // Auto-save client if new
+        const q = query(collection(db, "clients"), where("name", "==", report.empresa));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+            await addDoc(collection(db, "clients"), {
+                name: report.empresa,
+                contact: report.nombre_cliente,
+                phone: report.contacto,
+                type: report.tipo_cliente || 'Nuevo'
+            });
+        }
+    },
+
+    // Clients
+    findClient: async (text) => {
+        const snap = await getDocs(collection(db, "clients"));
+        const all = snap.docs.map(d => d.data());
+        return all.filter(c => c.name.toLowerCase().includes(text.toLowerCase()));
+    }
+};
+
+// ==========================================
+// VIEWS
+// ==========================================
+
+App.Views.Login = {
+    render: () => `
+        <div class="login-wrapper">
+            <div class="vendor-form login-form" style="max-width: 400px; margin: 0 auto;">
+                <h1>Iniciar Sesión</h1>
+                <p>Sistema de Reportes</p>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label>Correo</label>
+                        <input type="email" id="email" required placeholder="admin@app.com" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label>Contraseña</label>
+                        <input type="password" id="password" required placeholder="******" autocomplete="current-password">
+                    </div>
+                    <button type="submit" class="btn-submit">Ingresar</button>
+                </form>
+            </div>
+        </div>
+    `,
+    attachEvents: (render) => {
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            Utils.showLoading();
             try {
-                await App.Services.Auth.loginOrRegister(email, password);
-                // Auth state listener will handle the rest
+                await App.Services.Auth.login(
+                    document.getElementById('email').value.trim(),
+                    document.getElementById('password').value
+                );
+                render();
             } catch (err) {
                 alert(err.message);
-                UI.hideLoading();
+            } finally {
+                Utils.hideLoading();
             }
         });
     }
 };
 
-// ==========================================
-// VIEW: Admin
-// ==========================================
 App.Views.Admin = {
-    render: async (currentUser) => {
-        UI.showLoading();
+    render: async (user) => {
+        Utils.showLoading();
+        const reports = await App.Services.Storage.getReports();
         const users = await App.Services.Storage.getUsers();
-        const advisors = users.filter(u => u.role !== 'admin');
-        const reports = await App.Services.Storage.getReports(); // Raw reports
 
-        // Apply logic filters
+        // Filter Logic
         const f = App.State.filters;
-        const filteredReports = reports.filter(r => {
+        const filtered = reports.filter(r => {
             if (f.start && r.fecha < f.start) return false;
             if (f.end && r.fecha > f.end) return false;
             if (f.asesor && r.asesor !== f.asesor) return false;
@@ -262,326 +238,209 @@ App.Views.Admin = {
             return true;
         });
 
-        const userRows = users.map(u => `
-            <tr>
-                <td>${u.email}</td>
-                <td>${u.name}</td>
-                <td><span class="badge ${u.role === 'admin' ? 'badge-warning' : 'badge-success'}">${u.role}</span></td>
-            </tr>
-        `).join('');
-
-        const reportRows = filteredReports.map(r => `
+        const reportRows = filtered.map(r => `
             <tr>
                 <td>${r.asesor}</td>
                 <td>${r.fecha}</td>
                 <td>${r.empresa}</td>
-                <td>
-                     <span class="badge ${r.cobranza ? 'badge-success' : 'badge-warning'}">
-                        ${r.cobranza ? 'Cobrado' : 'Pendiente'}
-                    </span>
-                </td>
-                <td>${r.monto ? '$' + parseFloat(r.monto).toFixed(2) : '-'}</td>
-                 <td>
-                    <button onclick="alert('Descripción: ${r.descripcion}\\n\\nObservaciones: ${r.observaciones}')" class="btn-secondary" style="font-size:0.7rem; padding: 2px 6px;">Ver</button>
-                </td>
-            </tr>
-        `).join('');
+                <td><span class="badge ${r.cobranza ? 'badge-success' : 'badge-warning'}">${r.cobranza ? 'Cobrado' : 'Pendiente'}</span></td>
+                <td>${r.monto ? '$' + r.monto : '-'}</td>
+            </tr>`).join('');
 
-        const advisorOptions = advisors.map(a => `<option value="${a.name}" ${f.asesor === a.name ? 'selected' : ''}>${a.name}</option>`).join('');
+        const userRows = users.map(u => `
+            <tr>
+                <td>${u.email}</td>
+                <td>${u.name}</td>
+                <td>${u.role}</td>
+                <td><button class="btn-sm btn-pass" data-email="${u.email}">Cambiar Clave</button></td>
+            </tr>`).join('');
 
-        UI.hideLoading();
+        const advisors = users.filter(u => u.role !== 'admin').map(u => `<option value="${u.name}">${u.name}</option>`).join('');
+
+        Utils.hideLoading();
 
         return `
             <div class="admin-dashboard">
                 <header class="dashboard-header">
-                    <div>
-                        <h2>Panel Administrativo</h2>
-                        <p style="font-size:0.9rem; color:gray;">Admin: ${currentUser.name}</p>
-                    </div>
-                    <button id="logoutBtn" class="btn-secondary">Cerrar Sesión</button>
+                    <h2>Panel Admin</h2>
+                    <button id="logoutBtn" class="btn-secondary">Salir</button>
                 </header>
-
+                
                 <div class="dashboard-section">
                     <h3>Reportes</h3>
-                    <div class="filters-bar" style="background: white; padding: 16px; border-radius: 12px; margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end;">
-                         <div><label>Inicio</label><input type="date" id="fStart" value="${f.start}"></div>
-                         <div><label>Fin</label><input type="date" id="fEnd" value="${f.end}"></div>
-                         <div><label>Asesor</label>
-                             <select id="fAsesor" style="width:100%"><option value="">Todos</option>${advisorOptions}</select>
-                         </div>
-                         <div><label>Empresa</label><input type="text" id="fClient" placeholder="Buscar..." value="${f.empresa}"></div>
-                         <button id="btnExport" class="btn-primary" style="height: 42px; background: #059669; font-size: 0.9rem;">Exportar CSV</button>
+                    <div class="filters-bar" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px;">
+                        <input type="date" id="fStart" value="${f.start}">
+                        <input type="date" id="fEnd" value="${f.end}">
+                        <select id="fAsesor"><option value="">Todos los Asesores</option>${advisors}</select>
+                        <input type="text" id="fClient" placeholder="Buscar empresa..." value="${f.empresa}">
                     </div>
-
-                    <div class="dashboard-card"><div class="table-responsive">
+                    <div class="dashboard-card table-responsive">
                         <table>
-                            <thead><tr><th>Asesor</th><th>Fecha</th><th>Empresa</th><th>Estado</th><th>Monto</th><th>Info</th></tr></thead>
-                            <tbody>${reportRows.length ? reportRows : '<tr><td colspan="6" align="center">Sin resultados</td></tr>'}</tbody>
+                            <thead><tr><th>Asesor</th><th>Fecha</th><th>Empresa</th><th>Estado</th><th>Monto</th></tr></thead>
+                            <tbody>${reportRows || '<tr><td colspan="5">Sin datos</td></tr>'}</tbody>
                         </table>
-                    </div></div>
+                    </div>
                 </div>
 
                 <div class="dashboard-section">
-                    <h3>Gestión de Usuarios (Lista Blanca)</h3>
+                    <h3>Usuarios</h3>
                     <div class="dashboard-card">
-                         <form id="addUserForm" class="inline-form" style="box-shadow:none; padding:0; margin-bottom:15px; grid-template-columns: 1fr 1fr 100px;">
-                            <input type="email" id="newEmail" placeholder="Correo electrónico" required style="grid-column: span 1;">
-                            <input type="text" id="newName" placeholder="Nombre completo" required style="grid-column: span 1;">
-                            <button type="submit" class="btn-primary">Autorizar</button>
+                        <form id="addUserForm" class="inline-form" style="display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:10px; margin-bottom:15px;">
+                            <input type="email" id="newEmail" placeholder="Email" required>
+                            <input type="password" id="newPass" placeholder="Clave" required>
+                            <input type="text" id="newName" placeholder="Nombre" required>
+                            <button type="submit" class="btn-primary">Crear</button>
                         </form>
                         <div class="table-responsive">
-                            <table style="width:100%">
-                                <thead><tr><th>Email</th><th>Nombre</th><th>Rol</th></tr></thead>
-                                <tbody>${userRows}</tbody>
-                            </table>
+                            <table style="width:100%"><thead><tr><th>Email</th><th>Nombre</th><th>Rol</th><th>Acciones</th></tr></thead><tbody>${userRows}</tbody></table>
                         </div>
                     </div>
                 </div>
             </div>
         `;
     },
+    attachEvents: (render) => {
+        document.getElementById('logoutBtn').onclick = App.Services.Auth.logout;
 
-    attachEvents: (renderApp) => {
-        document.getElementById('logoutBtn').addEventListener('click', App.Services.Auth.logout);
-
-        // Filters
-        const inputIds = ['fStart', 'fEnd', 'fAsesor', 'fClient'];
-        inputIds.forEach(id => {
-            document.getElementById(id).addEventListener(id === 'fClient' ? 'input' : 'change', (e) => {
-                if (id === 'fClient') {  // Debounce
-                    clearTimeout(window.st);
-                    window.st = setTimeout(() => {
-                        App.State.filters.empresa = e.target.value;
-                        renderApp();
-                    }, 500);
-                } else {
-                    App.State.filters[id === 'fStart' ? 'start' : id === 'fEnd' ? 'end' : 'asesor'] = e.target.value;
-                    renderApp();
-                }
-            });
+        // Filter Events
+        ['fStart', 'fEnd', 'fAsesor', 'fClient'].forEach(id => {
+            document.getElementById(id).onchange = (e) => {
+                const key = id === 'fAsesor' ? 'asesor' : id === 'fClient' ? 'empresa' : id === 'fStart' ? 'start' : 'end';
+                App.State.filters[key] = e.target.value;
+                render();
+            };
         });
 
         // Add User
-        document.getElementById('addUserForm').addEventListener('submit', async (e) => {
+        document.getElementById('addUserForm').onsubmit = async (e) => {
             e.preventDefault();
-            UI.showLoading();
+            Utils.showLoading();
             try {
-                await App.Services.Storage.whitelistUser({
-                    email: document.getElementById('newEmail').value.trim(),
-                    name: document.getElementById('newName').value.trim(),
+                await App.Services.Auth.registerUser({
+                    email: document.getElementById('newEmail').value,
+                    password: document.getElementById('newPass').value,
+                    name: document.getElementById('newName').value,
                     role: 'vendor'
                 });
-                alert('Usuario autorizado. Pídale que ingrese con su correo para establecer contraseña.');
-                document.getElementById('addUserForm').reset();
-                renderApp();
-            } catch (err) {
-                alert(err.message);
-            } finally {
-                UI.hideLoading();
-            }
-        });
+                alert('Usuario creado');
+                render();
+            } catch (err) { alert(err.message); }
+            finally { Utils.hideLoading(); }
+        };
 
-        // Export (Simplified)
-        document.getElementById('btnExport').addEventListener('click', () => {
-            App.Views.Admin.exportToCSV(); // Ensure this method exists or alert
-            // Reuse existing export logic or simple alert
-            // For safety, re-implementing exportToCSV in this update to be sure
-            // But to save tokens, I'll alert for now as per previous version, OR I can add it quickly.
-            // Let's assume exportToCSV is needed. I'll add a simple one here.
-
-            const rows = document.querySelectorAll('#reportsTableBody tr');
-            let csv = [];
-            rows.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length > 2) { // valid row
-                    csv.push(Array.from(cols).map(c => c.innerText.replace(/,/g, '')).join(','));
+        // Change Pass
+        document.querySelectorAll('.btn-pass').forEach(btn => {
+            btn.onclick = async () => {
+                const mail = btn.dataset.email;
+                const newP = prompt(`Nueva clave para ${mail}:`);
+                if (newP) {
+                    await App.Services.Auth.updateUserPassword(mail, newP);
+                    alert("Clave actualizada");
                 }
-            });
-            const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a'); a.href = url; a.download = 'report.csv'; a.click();
+            };
         });
     }
 };
 
-// ==========================================
-// VIEW: Form (Vendor)
-// ==========================================
 App.Views.Form = {
-    render: (currentUser) => {
-        const today = new Date().toISOString().split('T')[0];
-        return `
-            <header class="form-header" style="position:relative">
-                <h1>Reporte Diario</h1>
-                <p>Hola, <strong>${currentUser.name}</strong></p>
-                <button id="logoutBtn" style="position:absolute; top:0; right:0; border:none; background:none; color:var(--primary-color); cursor:pointer;">Salir</button>
-            </header>
-            <form id="vendorForm" class="vendor-form">
-                <div class="form-group"><label>Fecha</label><input type="date" name="fecha" value="${today}" required></div>
-                <div class="form-grid">
-                    <div class="form-group"><label>Inicio</label><input type="time" name="hora_inicio" required></div>
-                    <div class="form-group"><label>Fin</label><input type="time" name="hora_fin" required></div>
-                </div>
-                <div class="form-group" style="position:relative">
-                    <label>Empresa</label>
-                    <input type="text" id="empresa" name="empresa" required placeholder="Buscar..." autocomplete="off">
-                    <div id="suggestions" class="autocomplete-items"></div>
-                </div>
-                <div class="form-group"><label>Contacto</label><input type="text" id="nombre_cliente" name="nombre_cliente" required></div>
-                <div class="form-group"><label>Teléfono</label><input type="tel" id="contacto" name="contacto" required></div>
-                
-                <div class="form-group radio-group">
-                     <label class="radio-container"><input type="radio" name="tipo_actividad" value="visita" checked><span class="radio-custom"></span> Visita</label>
-                     <label class="radio-container"><input type="radio" name="tipo_actividad" value="capacitacion"><span class="radio-custom"></span> Capacitación</label>
-                </div>
-                <div class="form-group"><textarea name="descripcion" placeholder="Actividad..." rows="3"></textarea></div>
-                <div class="form-group"><textarea name="observaciones" placeholder="Observaciones..." rows="2"></textarea></div>
-                
-                <fieldset>
-                    <legend>Venta / Cobro</legend>
-                    <div class="form-grid">
-                        <input type="number" name="monto" placeholder="Monto $" step="0.01">
-                        <input type="text" name="factura" placeholder="Factura #">
-                    </div>
-                    <div style="margin-top:10px">
-                        <label class="radio-container"><input type="checkbox" name="cobranza"><span class="check-custom" style="width:20px;height:20px;border:2px solid gray;display:inline-block;margin-right:5px"></span> Cobranza Realizada</label>
-                    </div>
-                </fieldset>
+    render: (user) => `
+        <header class="form-header" style="display:flex; justify-content:space-between;">
+            <div><h1>Reporte</h1><p>${user.name}</p></div>
+            <button id="logoutBtn" style="background:none; border:none; color:var(--primary-color);">Salir</button>
+        </header>
+        <form id="vendorForm" class="vendor-form">
+            <div class="form-group"><label>Fecha</label><input type="date" name="fecha" value="${new Date().toISOString().split('T')[0]}" required></div>
+            <div class="form-grid">
+                <div class="form-group"><label>Inicio</label><input type="time" name="hora_inicio" required></div>
+                <div class="form-group"><label>Fin</label><input type="time" name="hora_fin" required></div>
+            </div>
+            <div class="form-group" style="position:relative">
+                <label>Empresa</label><input type="text" id="empresa" name="empresa" required autocomplete="off">
+                <div id="suggestions" class="autocomplete-items"></div>
+            </div>
+            <div class="form-group"><label>Contacto</label><input type="text" id="nombre_cliente" name="nombre_cliente" required></div>
+            <div class="form-group"><label>Teléfono</label><input type="tel" id="contacto" name="contacto" required></div>
+            <div class="form-group"><label>Actividad: </label> <label><input type="radio" name="tipo_actividad" value="visita" checked> Visita</label> <label><input type="radio" name="tipo_actividad" value="capacitacion"> Capacitacion</label></div>
+            <div class="form-group"><textarea name="descripcion" placeholder="Detalles..." rows="3"></textarea></div>
+             <div class="form-grid">
+                <input type="number" name="monto" placeholder="Monto $" step="0.01">
+                <input type="text" name="factura" placeholder="Factura #">
+            </div>
+             <div style="margin-top:10px">
+                <label><input type="checkbox" name="cobranza"> Cobranza Realizada</label>
+            </div>
+            <button type="submit" class="btn-submit">Enviar</button>
+        </form>
+    `,
+    attachEvents: (render, user) => {
+        document.getElementById('logoutBtn').onclick = App.Services.Auth.logout;
 
-                <div class="form-actions"><button type="submit" class="btn-submit">Enviar Reporte</button></div>
-            </form>
-        `;
-    },
-    attachEvents: (renderApp, currentUser) => {
-        document.getElementById('logoutBtn').addEventListener('click', App.Services.Auth.logout);
-
-        // Form Submit
         const form = document.getElementById('vendorForm');
-        form.addEventListener('submit', async (e) => {
+        form.onsubmit = async (e) => {
             e.preventDefault();
-            const btn = form.querySelector('button'); btn.disabled = true; btn.textContent = 'Enviando...';
-
             const formData = new FormData(form);
             const data = Object.fromEntries(formData.entries());
-            data.asesor = currentUser.name;
+            data.asesor = user.name;
             data.cobranza = form.querySelector('[name="cobranza"]').checked;
 
+            Utils.showLoading();
             try {
                 await App.Services.Storage.addReport(data);
-                alert('Reporte guardado!');
+                alert("Reporte Enviado");
                 form.reset();
                 form.querySelector('[name="fecha"]').value = new Date().toISOString().split('T')[0];
-            } catch (err) {
-                alert('Error: ' + err.message);
-            } finally {
-                UI.hideLoading();
-            }
-        });
+            } catch (e) { alert(e.message); }
+            finally { Utils.hideLoading(); }
+        };
 
-        // Autocomplete Logic Re-implementation
         const empInput = document.getElementById('empresa');
         const sugg = document.getElementById('suggestions');
-
-        empInput.addEventListener('input', async (e) => {
+        empInput.oninput = async (e) => {
             if (e.target.value.length < 2) { sugg.innerHTML = ''; return; }
             const clients = await App.Services.Storage.findClient(e.target.value);
-            sugg.innerHTML = '';
-            clients.forEach(c => {
-                const div = document.createElement('div');
-                div.className = 'autocomplete-item';
-                div.innerHTML = `<strong>${c.name}</strong> - ${c.contact}`;
-                div.onclick = () => {
-                    empInput.value = c.name;
-                    document.getElementById('nombre_cliente').value = c.contact;
-                    document.getElementById('contacto').value = c.phone;
-                    sugg.innerHTML = '';
-                };
-                sugg.appendChild(div);
-            });
-        });
-        document.addEventListener('click', (e) => { if (e.target !== empInput) sugg.innerHTML = ''; });
+            sugg.innerHTML = clients.map(c => `<div class="autocomplete-item" onclick="document.getElementById('empresa').value='${c.name}';document.getElementById('nombre_cliente').value='${c.contact}';document.getElementById('contacto').value='${c.phone}';document.getElementById('suggestions').innerHTML=''"><strong>${c.name}</strong></div>`).join('');
+        };
     }
 };
 
 // ==========================================
-// CONTROLLER: Main
+// MAIN CONTROLLER
 // ==========================================
 async function renderApp() {
     const app = document.getElementById('app');
-    const { currentUser } = App.State;
+    const user = App.Services.Auth.getCurrentUser();
 
-    app.innerHTML = '';
-
-    if (!currentUser) {
-        app.innerHTML = App.Views.Login.render();
-        App.Views.Login.attachEvents();
-        return;
-    }
-
-    if (currentUser.role === 'admin') {
-        app.innerHTML = await App.Views.Admin.render(currentUser);
-        App.Views.Admin.attachEvents(() => renderApp());
-    } else {
-        app.innerHTML = App.Views.Form.render(currentUser);
-        App.Views.Form.attachEvents(() => renderApp(), currentUser);
-    }
-}
-
-// Global Auth State Observer
-onAuthStateChanged(auth, async (firebaseUser) => {
-    if (firebaseUser) {
-        // Logged in, fetch profile data (Name, Role)
-        const profile = await App.Services.Storage.getUserProfile(firebaseUser.email);
-        if (profile) {
-            App.State.currentUser = profile;
-        } else {
-            console.error("Perfil de usuario no encontrado en base de datos");
-            await signOut(auth);
-            App.State.currentUser = null;
-        }
-    } else {
-        App.State.currentUser = null;
-    }
-    renderApp();
-});
-
-// AUTO-INIT: Intentar crear admin si no hay usuarios
-(async () => {
+    // AUTO-BOOTSTRAP ADMIN
+    // If no users exist, create one automatically
     try {
-        const usersRef = collection(db, "users");
-        // Intentamos leer. Si falla por permisos, saltará al catch.
-        const snapshot = await getDocs(usersRef);
-
-        if (snapshot.empty) {
-            console.log("No hay usuarios. Intentando crear Admin Automático...");
-            const adminEmail = "admin@vendors.com";
-
-            // 1. Crear Perfil en Firestore
-            await setDoc(doc(db, "users", adminEmail), {
-                email: adminEmail,
-                name: "Administrador",
+        const usersSnap = await getDocs(collection(db, "users"));
+        if (usersSnap.empty) {
+            console.log("Bootstraping Admin...");
+            const passHash = await Utils.hash("admin123");
+            await addDoc(collection(db, "users"), {
+                email: "admin@vendors.com",
+                name: "Super Admin",
+                password: passHash,
                 role: "admin",
                 createdAt: new Date().toISOString()
             });
-
-            // 2. Crear Auth
-            try {
-                await createUserWithEmailAndPassword(auth, adminEmail, "admin123");
-                alert(`✅ USUARIO ADMIN CREADO\n\nCorreo: ${adminEmail}\nContraseña: admin123\n\n¡Ingresa ahora!`);
-            } catch (authErr) {
-                if (authErr.code === 'auth/email-already-in-use') {
-                    // Si ya existe el Auth pero no la DB, acabamos de arreglar la DB arriba.
-                    alert(`✅ USUARIO ADMIN RESTAURADO\n\nCorreo: ${adminEmail}\nContraseña: admin123\n\n(El perfil de base de datos faltaba y fue recreado).`);
-                } else {
-                    console.error("Error creando Auth:", authErr);
-                }
-            }
+            alert("⚠️ PRIMER INICIO\n\nUsuario Admin Creado Automáticamente:\nEmail: admin@vendors.com\nClave: admin123");
         }
-    } catch (e) {
-        if (e.code === 'permission-denied') {
-            console.warn("Auto-Init: Permisos denegados. (Esto es correcto si ya cerraste las reglas de seguridad).");
+    } catch (e) { console.error("Auto-init error", e); }
+
+
+    if (!user) {
+        app.innerHTML = App.Views.Login.render();
+        App.Views.Login.attachEvents(renderApp);
+    } else {
+        if (user.role === 'admin') {
+            app.innerHTML = await App.Views.Admin.render(user);
+            App.Views.Admin.attachEvents(renderApp);
         } else {
-            console.error("Error auto-init:", e);
+            app.innerHTML = App.Views.Form.render(user);
+            App.Views.Form.attachEvents(renderApp, user);
         }
     }
-})();
+}
+
+renderApp();
